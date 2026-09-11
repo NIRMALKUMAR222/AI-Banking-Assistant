@@ -236,20 +236,6 @@ A comprehensive automated test suite (119 test cases) covers unit, integration, 
 
 ---
 
-## ☁️ Docker Deployment
-
-Deploy the entire architecture with Docker Compose:
-
-```bash
-# Build and launch both Backend and Frontend containers
-docker-compose up --build -d
-
-# Check service logs
-docker-compose logs -f
-```
-
----
-
 ## 🛡️ License
 Distributed under the MIT License. See `LICENSE` for more information.
 
