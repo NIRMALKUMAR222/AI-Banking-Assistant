@@ -13,118 +13,37 @@ SecureBank RAG is a production-grade, security-hardened banking assistant that c
 
 ## ✨ Features & Architecture
 
-SecureBank RAG runs a **multi-stage gateway pipeline** — auth, prompt-injection guarding, PII masking, intent routing, retrieval, and multi-provider LLM generation — for every request:
+SecureBank RAG runs every request through a simple pipeline: **auth → security guardrails → intent routing → retrieval/banking data → LLM generation**.
 
 ```mermaid
-flowchart TD
-    subgraph Client ["Client Layer"]
-        UI["Streamlit SPA UI<br/>(Port 8501)"]
-        Curl["API Consumers / Mobile SDK<br/>(cURL / HTTP Clients)"]
-    end
-
-    subgraph Gateway ["FastAPI Application Gateway (Port 8000)"]
-        CORSMW["CORS Middleware"]
-        LogMW["Request Logging Middleware<br/>(Trace ID & Latency)"]
-        AuthDep{"Auth Dependency<br/>(require_auth)"}
-        JWTCheck["JWT Bearer Token Validator"]
-        KeyCheck["X-API-Key Service Validator"]
-    end
-
-    subgraph Security ["Security & Guardrail Layer"]
-        PGuard["Prompt Injection Guard<br/>(19 Regex Filters + Risk Score)"]
-        Masker["PII Masking Engine<br/>(Card numbers, IFSC, Accounts)"]
-        OwnerCheck["Account Ownership Enforcer<br/>(Token Sub == Target Account)"]
-    end
-
-    subgraph Routing ["Intent & Retrieval Layer"]
-        IntentRouter["Two-Stage Intent Router<br/>(1. Keyword -> 2. Cosine Similarity)"]
-        Embedder["SentenceTransformer Embedder<br/>(all-MiniLM-L6-v2)"]
-        VectorStore[("Vector Store<br/>FAISS (default) / ChromaDB")]
-        KBDocs[("Knowledge Base Markdown<br/>10 Banking Documents")]
-    end
-
-    subgraph Banking ["Core Banking Engine"]
-        SynthData["Synthetic Banking Store<br/>(10 Accounts, 600+ Txns, Loans, Cards)"]
-        TxOps["Fund Transfer & Balance Engine"]
-    end
-
-    subgraph LLM ["LLM Generation Subsystem"]
-        ProviderRouter{"Provider Auto-Detector"}
-        GroqAPI["GroqCloud LPU<br/>(qwen/qwen3.8-27b / llama)"]
-        xAIAPI["xAI API<br/>(grok-beta)"]
-        OfflineStub["Offline Contextual Stub<br/>(Deterministic Verified Answers)"]
-    end
-
-    UI -->|"HTTP / REST<br/>(Bearer Token)"| CORSMW
-    Curl -->|"HTTP / REST<br/>(X-API-Key)"| CORSMW
-    CORSMW --> LogMW
-    LogMW --> AuthDep
-
-    AuthDep -->|"Bearer"| JWTCheck
-    AuthDep -->|"X-API-Key"| KeyCheck
-    JWTCheck --> OwnerCheck
-    KeyCheck --> OwnerCheck
-
-    OwnerCheck --> PGuard
-    PGuard -->|"Sanitized Query"| IntentRouter
-
-    IntentRouter -->|"RAG Required"| Embedder
-    Embedder -->|"Query Embedding"| VectorStore
-    KBDocs -.->|"Ingest / Chunk"| VectorStore
-    VectorStore -->|"Top-k Chunks + Citations"| LLM
-
-    IntentRouter -->|"Banking API Required"| SynthData
-    SynthData -->|"Raw Context"| Masker
-    Masker -->|"Masked Account/Txn Context"| LLM
-
-    LLM --> ProviderRouter
-    ProviderRouter -->|"Key: gsk_..."| GroqAPI
-    ProviderRouter -->|"Key: xai-..."| xAIAPI
-    ProviderRouter -->|"No Key / Fallback"| OfflineStub
-
-    GroqAPI -->|"Grounded Response"| UI
-    xAIAPI -->|"Grounded Response"| UI
-    OfflineStub -->|"Verified Offline Data"| UI
+flowchart LR
+    A["👤 User<br/>(Streamlit UI / API)"] --> B["🔐 Auth<br/>(JWT / API Key)"]
+    B --> C["🛡️ Security Guardrails<br/>(Prompt Guard + PII Masking)"]
+    C --> D["🎯 Intent Router"]
+    D --> E["📚 RAG Retrieval<br/>(FAISS + Knowledge Base)"]
+    D --> F["🏦 Banking Engine<br/>(Accounts, Cards, Loans)"]
+    E --> G["🧠 LLM Engine<br/>(Groq / xAI / Offline)"]
+    F --> G
+    G --> A
 ```
 
-### Request & RAG Data Flow
+### Request Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as Customer / User
-    participant Frontend as Streamlit Frontend (Port 8501)
-    participant API as FastAPI Backend (Port 8000)
-    participant Guard as Prompt Guard & Security
-    participant Router as Intent Router
-    participant Retriever as Retriever & FAISS
-    participant Banking as Banking Service
-    participant LLM as Groq LLM (qwen/qwen3.8-27b)
+    actor User
+    participant App as SecureBank App
+    participant Data as RAG + Banking Data
+    participant LLM as LLM (Groq / xAI)
 
-    User->>Frontend: Enters query: "What is my balance and what are home loan rates?"
-    Frontend->>API: POST /chat/ (with Bearer Token & account_id)
-    API->>Guard: Inspect query for prompt injection & PII
-    Guard-->>API: Safe, Sanitized Query (Risk Score: 0)
-
-    API->>Router: Classify Intent
-    Router-->>API: Intent: loan_inquiry (needs_rag=True, needs_banking_api=True)
-
-    par Parallel Data Gathering
-        API->>Retriever: Embed query & Search FAISS index (Top-k=5)
-        Retriever-->>API: Chunks from 08_interest_rates.md, 02_loan_products.md
-    and
-        API->>Banking: Fetch account ACC001 details & balance
-        Banking-->>API: Raw Account & Card Data
-    end
-
-    API->>Guard: Mask PII (Cards: ****-****-****-0133, IFSC: SBNK***026)
-    Guard-->>API: Masked Context String
-
-    API->>LLM: Prompt = System Instructions + Retrieved Chunks + Masked Banking Data + User Query
-    LLM-->>API: Grounded Answer with rates (8.50%) & Account status
-
-    API-->>Frontend: JSON: { answer, intent, sources: ["08_interest_rates.md"], risk_score: 0 }
-    Frontend-->>User: Displays assistant bubble with intent badge & source citations
+    User->>App: Asks a banking question
+    App->>App: Verify identity & sanitize query
+    App->>Data: Fetch relevant policy chunks & account data
+    Data-->>App: Masked, grounded context
+    App->>LLM: Query + context
+    LLM-->>App: Grounded answer
+    App-->>User: Answer with source citations
 ```
 
 ### 1. 🖥️ Frontend Layer (`frontend/`)
